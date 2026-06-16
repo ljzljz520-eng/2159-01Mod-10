@@ -18,6 +18,8 @@ RUN emcc fireworks.c \
     -s USE_SDL=2 \
     -s WASM=1 \
     -s ALLOW_MEMORY_GROWTH=1 \
+    -s EXPORTED_RUNTIME_METHODS=['ccall','cwrap'] \
+    -s EXPORTED_FUNCTIONS=['_beat_trigger','_add_beat_timestamp','_clear_beats','_start_beat_playback','_stop_beat_playback','_is_beat_playing'] \
     -O3 \
     -o public/fireworks.js
 

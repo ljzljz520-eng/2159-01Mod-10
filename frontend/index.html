@@ -20,29 +20,240 @@
             display: block;
             outline: none;
         }
+        #beat-panel {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 14px 18px;
+            color: #ccc;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+            z-index: 100;
+            user-select: none;
+            min-width: 220px;
+        }
+        #beat-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            color: #fff;
+            border-bottom: 1px solid rgba(255,255,255,0.15);
+            padding-bottom: 6px;
+        }
+        #beat-panel .hint {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+        #beat-panel .row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        #beat-panel button {
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.25);
+            color: #eee;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        #beat-panel button:hover {
+            background: rgba(255,255,255,0.22);
+        }
+        #beat-panel button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+        #beat-panel input[type="file"] {
+            font-size: 11px;
+            color: #aaa;
+        }
+        #beat-status {
+            font-size: 11px;
+            margin-top: 4px;
+            min-height: 16px;
+            color: #6f6;
+        }
+        #beat-panel .format-hint {
+            font-size: 10px;
+            color: #666;
+            margin-top: 6px;
+            line-height: 1.4;
+        }
+        #beat-flash {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            background: rgba(255, 200, 80, 0);
+            z-index: 50;
+            transition: background 0.05s ease-out;
+        }
+        #beat-flash.flash {
+            background: rgba(255, 200, 80, 0.06);
+        }
     </style>
 </head>
 <body>
-    <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    <div id="beat-flash"></div>
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="0"></canvas>
+
+    <div id="beat-panel">
+        <h3>节拍控制</h3>
+        <div class="hint">按任意键发射烟花 / 加载节拍脚本控制时序</div>
+        <div class="row">
+            <input type="file" id="beat-file" accept=".txt,.beat,.csv">
+        </div>
+        <div class="row">
+            <button id="btn-play" disabled>播放节拍</button>
+            <button id="btn-stop" disabled>停止</button>
+            <button id="btn-clear" disabled>清除</button>
+        </div>
+        <div id="beat-status">默认模式：随机发射</div>
+        <div class="format-hint">
+            节拍文件格式：每行一个时间戳（毫秒）<br>
+            示例：0 &nbsp; 500 &nbsp; 1000 &nbsp; 1500
+        </div>
+    </div>
+
     <script>
         var Module = {
             canvas: (function() {
                 var canvas = document.getElementById('canvas');
-                // Make canvas full screen
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
                 return canvas;
             })(),
             onRuntimeInitialized: function() {
                 console.log("烟花C模块已加载");
+                initBeatUI();
             }
         };
-        
+
         window.addEventListener('resize', function() {
             var canvas = document.getElementById('canvas');
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
         });
+
+        function ccall_safe(name, retType, argTypes, args) {
+            if (Module.ccall) {
+                try {
+                    return Module.ccall(name, retType, argTypes, args);
+                } catch(e) {
+                    console.warn('ccall ' + name + ' failed:', e);
+                }
+            } else if (Module['_' + name]) {
+                try {
+                    return Module['_' + name].apply(null, args || []);
+                } catch(e) {
+                    console.warn('_' + name + ' failed:', e);
+                }
+            }
+        }
+
+        var beatTimestamps = [];
+
+        function flashBeat() {
+            var el = document.getElementById('beat-flash');
+            el.classList.add('flash');
+            setTimeout(function() { el.classList.remove('flash'); }, 80);
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') return;
+            if (e.target.tagName === 'INPUT') return;
+            ccall_safe('beat_trigger', null, [], []);
+            flashBeat();
+        });
+
+        function initBeatUI() {
+            var fileInput = document.getElementById('beat-file');
+            var btnPlay = document.getElementById('btn-play');
+            var btnStop = document.getElementById('btn-stop');
+            var btnClear = document.getElementById('btn-clear');
+            var statusEl = document.getElementById('beat-status');
+
+            fileInput.addEventListener('change', function(e) {
+                var file = e.target.files[0];
+                if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function(ev) {
+                    var text = ev.target.result;
+                    var lines = text.split(/[\r\n]+/);
+                    beatTimestamps = [];
+                    for (var i = 0; i < lines.length; i++) {
+                        var line = lines[i].trim();
+                        if (!line || line.charAt(0) === '#') continue;
+                        var ms = parseInt(line, 10);
+                        if (!isNaN(ms) && ms >= 0) {
+                            beatTimestamps.push(ms);
+                        }
+                    }
+                    beatTimestamps.sort(function(a, b) { return a - b; });
+                    if (beatTimestamps.length > 0) {
+                        btnPlay.disabled = false;
+                        btnClear.disabled = false;
+                        statusEl.textContent = '已加载 ' + beatTimestamps.length + ' 个节拍';
+                        statusEl.style.color = '#ff6';
+                    } else {
+                        statusEl.textContent = '文件中未找到有效时间戳';
+                        statusEl.style.color = '#f66';
+                    }
+                };
+                reader.readAsText(file);
+            });
+
+            btnPlay.addEventListener('click', function() {
+                if (beatTimestamps.length === 0) return;
+                ccall_safe('clear_beats', null, [], []);
+                for (var i = 0; i < beatTimestamps.length; i++) {
+                    ccall_safe('add_beat_timestamp', null, ['number'], [beatTimestamps[i]]);
+                }
+                ccall_safe('start_beat_playback', null, [], []);
+                btnStop.disabled = false;
+                statusEl.textContent = '节拍播放中... (' + beatTimestamps.length + ' 拍)';
+                statusEl.style.color = '#6f6';
+
+                var checkDone = setInterval(function() {
+                    var playing = ccall_safe('is_beat_playing', 'number', [], []);
+                    if (!playing) {
+                        clearInterval(checkDone);
+                        btnStop.disabled = true;
+                        statusEl.textContent = '节拍播放完毕，恢复随机模式';
+                        statusEl.style.color = '#6f6';
+                    }
+                }, 200);
+            });
+
+            btnStop.addEventListener('click', function() {
+                ccall_safe('stop_beat_playback', null, [], []);
+                btnStop.disabled = true;
+                statusEl.textContent = '已停止，恢复随机模式';
+                statusEl.style.color = '#6f6';
+            });
+
+            btnClear.addEventListener('click', function() {
+                ccall_safe('clear_beats', null, [], []);
+                beatTimestamps = [];
+                btnPlay.disabled = true;
+                btnStop.disabled = true;
+                btnClear.disabled = true;
+                fileInput.value = '';
+                statusEl.textContent = '默认模式：随机发射';
+                statusEl.style.color = '#6f6';
+            });
+        }
+
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(function() {
+                if (Module.calledRun !== false) initBeatUI();
+            }, 100);
+        }
     </script>
     <script src="fireworks.js"></script>
 </body>

@@ -30,9 +30,21 @@ typedef struct {
     Particle particles[MAX_PARTICLES];
 } Firework;
 
+#define MAX_BEATS 2048
+
+typedef struct {
+    int timestamps[MAX_BEATS];
+    int count;
+    int index;
+    Uint32 start_time;
+    int playing;
+} BeatScheduler;
+
 SDL_Window *window;
 SDL_Renderer *renderer;
 Firework fireworks[MAX_FIREWORKS];
+BeatScheduler beat_sched;
+int beat_pending = 0;
 int screen_width = 0;
 int screen_height = 0;
 
@@ -96,14 +108,64 @@ void init_firework(Firework *f) {
     f->active = 1;
 }
 
-void update() {
-    // Determine screen size dynamically if needed
-    // emscripten_get_element_css_size can be called here if canvas resizes, 
-    // but for performance we might want to check less frequently or listen to resize events.
-    // For now we assume size is set at init or updated via JS if needed.
+EMSCRIPTEN_KEEPALIVE
+void beat_trigger(void) {
+    beat_pending = 1;
+}
 
-    // Increased launch frequency (approx every 10 frames = 6 launches/sec at 60fps)
-    if (rand() % 10 == 0) {
+EMSCRIPTEN_KEEPALIVE
+void add_beat_timestamp(int ms) {
+    if (beat_sched.count < MAX_BEATS) {
+        beat_sched.timestamps[beat_sched.count++] = ms;
+    }
+}
+
+EMSCRIPTEN_KEEPALIVE
+void clear_beats(void) {
+    beat_sched.count = 0;
+    beat_sched.index = 0;
+    beat_sched.playing = 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void start_beat_playback(void) {
+    beat_sched.index = 0;
+    beat_sched.start_time = SDL_GetTicks();
+    beat_sched.playing = 1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void stop_beat_playback(void) {
+    beat_sched.playing = 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int is_beat_playing(void) {
+    return beat_sched.playing;
+}
+
+void update() {
+    if (beat_sched.playing && beat_sched.index < beat_sched.count) {
+        Uint32 elapsed = SDL_GetTicks() - beat_sched.start_time;
+        while (beat_sched.index < beat_sched.count &&
+               elapsed >= (Uint32)beat_sched.timestamps[beat_sched.index]) {
+            beat_pending = 1;
+            beat_sched.index++;
+        }
+        if (beat_sched.index >= beat_sched.count) {
+            beat_sched.playing = 0;
+        }
+    }
+
+    if (beat_pending) {
+        for (int i = 0; i < MAX_FIREWORKS; i++) {
+            if (!fireworks[i].active) {
+                init_firework(&fireworks[i]);
+                break;
+            }
+        }
+        beat_pending = 0;
+    } else if (!beat_sched.playing && rand() % 10 == 0) {
         for (int i = 0; i < MAX_FIREWORKS; i++) {
             if (!fireworks[i].active) {
                 init_firework(&fireworks[i]);
@@ -195,6 +257,16 @@ void draw() {
 }
 
 void main_loop() {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            emscripten_cancel_main_loop();
+        } else if (event.type == SDL_KEYDOWN) {
+            if (event.key.keysym.sym != SDLK_ESCAPE) {
+                beat_trigger();
+            }
+        }
+    }
     update();
     draw();
 }
